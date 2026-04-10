@@ -284,8 +284,84 @@ func (m *MultiEditToolRenderContext) RenderTool(sty *styles.Styles, width int, o
 }
 
 // -----------------------------------------------------------------------------
-// Download Tool
+// Hashline Edit Tool
 // -----------------------------------------------------------------------------
+
+// HashlineEditToolMessageItem is a message item that represents a hashline edit tool call.
+type HashlineEditToolMessageItem struct {
+	*baseToolMessageItem
+}
+
+var _ ToolMessageItem = (*HashlineEditToolMessageItem)(nil)
+
+// NewHashlineEditToolMessageItem creates a new [HashlineEditToolMessageItem].
+func NewHashlineEditToolMessageItem(
+	sty *styles.Styles,
+	toolCall message.ToolCall,
+	result *message.ToolResult,
+	canceled bool,
+) ToolMessageItem {
+	return newBaseToolMessageItem(sty, toolCall, result, &HashlineEditToolRenderContext{}, canceled)
+}
+
+// HashlineEditToolRenderContext renders hashline edit tool messages.
+type HashlineEditToolRenderContext struct{}
+
+// RenderTool implements the [ToolRenderer] interface.
+func (h *HashlineEditToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string {
+	if opts.IsPending() {
+		return pendingTool(sty, "Hashline-Edit", opts.Anim, opts.Compact)
+	}
+
+	var params tools.HashlineEditParams
+	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
+		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, width)
+	}
+
+	file := fsext.PrettyPath(params.FilePath)
+	toolParams := []string{file}
+	if len(params.Edits) > 0 {
+		toolParams = append(toolParams, "edits", fmt.Sprintf("%d", len(params.Edits)))
+	}
+
+	header := toolHeader(sty, opts.Status, "Hashline-Edit", width, opts.Compact, toolParams...)
+	if opts.Compact {
+		return header
+	}
+
+	if earlyState, ok := toolEarlyStateContent(sty, opts, width); ok {
+		return joinToolParts(header, earlyState)
+	}
+
+	if !opts.HasResult() {
+		return header
+	}
+
+	var meta tools.HashlineEditResponseMetadata
+	if err := json.Unmarshal([]byte(opts.Result.Metadata), &meta); err != nil {
+		bodyWidth := width - toolBodyLeftPaddingTotal
+		body := sty.Tool.Body.Render(toolOutputPlainContent(sty, opts.Result.Content, bodyWidth, opts.ExpandedContent))
+		return joinToolParts(header, body)
+	}
+
+	body := toolOutputMultiEditDiffContent(sty, file, tools.MultiEditResponseMetadata{
+		Additions:    meta.Additions,
+		Removals:     meta.Removals,
+		OldContent:   meta.OldContent,
+		NewContent:   meta.NewContent,
+		EditsApplied: meta.EditsApplied,
+		EditsFailed:  convertHashlineFailed(meta.EditsFailed),
+	}, len(params.Edits), width, opts.ExpandedContent)
+	return joinToolParts(header, body)
+}
+
+func convertHashlineFailed(failed []tools.HashlineEditFailed) []tools.FailedEdit {
+	result := make([]tools.FailedEdit, len(failed))
+	for i, f := range failed {
+		result[i] = tools.FailedEdit{Index: f.Index, Error: f.Error}
+	}
+	return result
+}
 
 // DownloadToolMessageItem is a message item that represents a download tool call.
 type DownloadToolMessageItem struct {

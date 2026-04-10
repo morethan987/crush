@@ -463,7 +463,7 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 			lines = append(lines, p.renderKeyValue("URL", params.URL, contentWidth))
 			lines = append(lines, p.renderKeyValue("File", fsext.PrettyPath(params.FilePath), contentWidth))
 		}
-	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName, tools.ViewToolName:
+	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName, tools.HashlineEditToolName, tools.ViewToolName:
 		var filePath string
 		switch params := p.permission.Params.(type) {
 		case tools.EditPermissionsParams:
@@ -471,6 +471,8 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 		case tools.WritePermissionsParams:
 			filePath = params.FilePath
 		case tools.MultiEditPermissionsParams:
+			filePath = params.FilePath
+		case tools.HashlineEditPermissionsParams:
 			filePath = params.FilePath
 		case tools.ViewPermissionsParams:
 			filePath = params.FilePath
@@ -531,6 +533,8 @@ func (p *Permissions) renderContent(width int) string {
 		return p.renderWriteContent(width)
 	case tools.MultiEditToolName:
 		return p.renderMultiEditContent(width)
+	case tools.HashlineEditToolName:
+		return p.renderHashlineEditContent(width)
 	case tools.DownloadToolName:
 		return p.renderDownloadContent(width)
 	case tools.FetchToolName:
@@ -573,6 +577,14 @@ func (p *Permissions) renderWriteContent(contentWidth int) string {
 
 func (p *Permissions) renderMultiEditContent(contentWidth int) string {
 	params, ok := p.permission.Params.(tools.MultiEditPermissionsParams)
+	if !ok {
+		return ""
+	}
+	return p.renderDiff(params.FilePath, params.OldContent, params.NewContent, contentWidth)
+}
+
+func (p *Permissions) renderHashlineEditContent(contentWidth int) string {
+	params, ok := p.permission.Params.(tools.HashlineEditPermissionsParams)
 	if !ok {
 		return ""
 	}

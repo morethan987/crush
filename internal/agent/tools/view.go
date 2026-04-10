@@ -16,6 +16,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
+	"github.com/charmbracelet/crush/internal/hashline"
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/skills"
@@ -203,7 +204,7 @@ func NewViewTool(
 			openInLSPs(ctx, lspManager, filePath)
 			waitForLSPDiagnostics(ctx, lspManager, filePath, 300*time.Millisecond)
 			output := "<file>\n"
-			output += addLineNumbers(content, params.Offset+1)
+			output += hashline.FormatHashLines(content, params.Offset+1)
 
 			if hasMore {
 				output += fmt.Sprintf("\n\n(File has more lines. Use 'offset' parameter to read beyond line %d)",
@@ -231,31 +232,6 @@ func NewViewTool(
 				meta,
 			), nil
 		})
-}
-
-func addLineNumbers(content string, startLine int) string {
-	if content == "" {
-		return ""
-	}
-
-	lines := strings.Split(content, "\n")
-
-	var result []string
-	for i, line := range lines {
-		line = strings.TrimSuffix(line, "\r")
-
-		lineNum := i + startLine
-		numStr := fmt.Sprintf("%d", lineNum)
-
-		if len(numStr) >= 6 {
-			result = append(result, fmt.Sprintf("%s|%s", numStr, line))
-		} else {
-			paddedNum := fmt.Sprintf("%6s", numStr)
-			result = append(result, fmt.Sprintf("%s|%s", paddedNum, line))
-		}
-	}
-
-	return strings.Join(result, "\n")
 }
 
 func readTextFile(filePath string, offset, limit int) (string, bool, error) {
@@ -411,7 +387,7 @@ func readBuiltinFile(params ViewParams, skillTracker *skills.Tracker) (fantasy.T
 	}
 
 	output := "<file>\n"
-	output += addLineNumbers(strings.Join(lines, "\n"), offset+1)
+	output += hashline.FormatHashLines(strings.Join(lines, "\n"), offset+1)
 	if hasMore {
 		output += fmt.Sprintf("\n\n(File has more lines. Use 'offset' parameter to read beyond line %d)",
 			offset+len(lines))
