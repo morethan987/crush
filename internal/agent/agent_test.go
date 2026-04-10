@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 	"charm.land/x/vcr"
@@ -619,6 +621,162 @@ func TestCoderAgent(t *testing.T) {
 			})
 		})
 	}
+}
+
+type rateLimitMockModel struct {
+	calls int
+}
+
+func (m *rateLimitMockModel) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Response, error) {
+	m.calls++
+	if m.calls == 1 {
+		return nil, &fantasy.ProviderError{
+			StatusCode: 429,
+			Message:    "rate limit exceeded",
+			Title:      "Too Many Requests",
+		}
+	}
+	return &fantasy.Response{
+		Content: fantasy.ResponseContent{
+			fantasy.TextContent{Text: "Hello after retry"},
+		},
+		Usage:        fantasy.Usage{InputTokens: 5, OutputTokens: 3},
+		FinishReason: fantasy.FinishReasonStop,
+	}, nil
+}
+
+func (m *rateLimitMockModel) Stream(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+	m.calls++
+	if m.calls == 1 {
+		return nil, &fantasy.ProviderError{
+			StatusCode: 429,
+			Message:    "rate limit exceeded",
+			Title:      "Too Many Requests",
+		}
+	}
+	return func(yield func(fantasy.StreamPart) bool) {
+		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "text-1"}) {
+			return
+		}
+		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "text-1", Delta: "Hello after retry"}) {
+			return
+		}
+		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextEnd, ID: "text-1"}) {
+			return
+		}
+		yield(fantasy.StreamPart{
+			Type:         fantasy.StreamPartTypeFinish,
+			Usage:        fantasy.Usage{InputTokens: 5, OutputTokens: 3},
+			FinishReason: fantasy.FinishReasonStop,
+		})
+	}, nil
+}
+
+func (m *rateLimitMockModel) Provider() string { return "mock" }
+func (m *rateLimitMockModel) Model() string    { return "mock-model" }
+
+func (m *rateLimitMockModel) GenerateObject(_ context.Context, _ fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *rateLimitMockModel) StreamObject(_ context.Context, _ fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func TestRetryBackoff(t *testing.T) {
+	t.Run("OnRetry callback is invoked on 429", func(t *testing.T) {
+		mockModel := &rateLimitMockModel{}
+
+		var retryCalled bool
+		var retryErr *fantasy.ProviderError
+		var retryDelay time.Duration
+
+		maxRetries := 5
+		agent := fantasy.NewAgent(mockModel)
+
+		result, err := agent.Stream(t.Context(), fantasy.AgentStreamCall{
+			Prompt:     "Hello",
+			MaxRetries: &maxRetries,
+			OnRetry: func(err *fantasy.ProviderError, delay time.Duration) {
+				retryCalled = true
+				retryErr = err
+				retryDelay = delay
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, "Hello after retry", result.Response.Content.Text())
+
+		require.True(t, retryCalled, "Expected OnRetry callback to be invoked")
+		require.NotNil(t, retryErr)
+		require.Equal(t, 429, retryErr.StatusCode)
+		require.Equal(t, "rate limit exceeded", retryErr.Message)
+		require.Greater(t, retryDelay, time.Duration(0), "Expected positive retry delay")
+	})
+
+	t.Run("retries up to max and fails", func(t *testing.T) {
+		alwaysFailModel := &always429Model{}
+
+		retryCount := 0
+		maxRetries := 3
+		agent := fantasy.NewAgent(alwaysFailModel)
+
+		_, err := agent.Stream(t.Context(), fantasy.AgentStreamCall{
+			Prompt:     "Hello",
+			MaxRetries: &maxRetries,
+			OnRetry: func(_ *fantasy.ProviderError, _ time.Duration) {
+				retryCount++
+			},
+		})
+		require.Error(t, err)
+
+		require.Equal(t, maxRetries, retryCount, "Expected OnRetry to be called for each retry attempt")
+	})
+
+	t.Run("default retry when MaxRetries is nil", func(t *testing.T) {
+		mockModel := &rateLimitMockModel{}
+
+		retryCalled := false
+		agent := fantasy.NewAgent(mockModel)
+
+		_, err := agent.Stream(t.Context(), fantasy.AgentStreamCall{
+			Prompt: "Hello",
+			OnRetry: func(_ *fantasy.ProviderError, _ time.Duration) {
+				retryCalled = true
+			},
+		})
+		require.NoError(t, err)
+		require.True(t, retryCalled, "Expected OnRetry to be called with default retry options")
+	})
+}
+
+type always429Model struct{}
+
+func (m *always429Model) Generate(_ context.Context, _ fantasy.Call) (*fantasy.Response, error) {
+	return nil, &fantasy.ProviderError{
+		StatusCode: 429,
+		Message:    "rate limit exceeded",
+		Title:      "Too Many Requests",
+	}
+}
+
+func (m *always429Model) Stream(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+	return nil, &fantasy.ProviderError{
+		StatusCode: 429,
+		Message:    "rate limit exceeded",
+		Title:      "Too Many Requests",
+	}
+}
+
+func (m *always429Model) Provider() string { return "mock" }
+func (m *always429Model) Model() string    { return "mock-model" }
+
+func (m *always429Model) GenerateObject(_ context.Context, _ fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *always429Model) StreamObject(_ context.Context, _ fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 func makeTestTodos(n int) []session.Todo {

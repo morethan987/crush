@@ -180,6 +180,7 @@ tasks:
       - git push origin main --follow-tags
 
   fetch-tags:
+    desc: Delete local nightly tag and fetch all tags from remote
     cmds:
       - git tag -d nightly || true
       - git fetch --tags

@@ -257,6 +257,7 @@ type Options struct {
 	Progress                  *bool        `json:"progress,omitempty" jsonschema:"description=Show indeterminate progress updates during long operations,default=true"`
 	DisableNotifications      bool         `json:"disable_notifications,omitempty" jsonschema:"description=Disable desktop notifications,default=false"`
 	DisabledSkills            []string     `json:"disabled_skills,omitempty" jsonschema:"description=List of skill names to disable and hide from the agent,example=crush-config"`
+	MaxRetries                int          `json:"max_retries,omitempty" jsonschema:"description=Maximum number of retries on transient provider errors like rate limiting (429),default=5,example=3,example=10"`
 }
 
 type MCPs map[string]MCPConfig
