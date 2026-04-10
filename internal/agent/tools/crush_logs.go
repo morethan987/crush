@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -164,15 +165,15 @@ func readLastLines(filePath string, n int) ([]map[string]any, error) {
 		}
 
 		// Parse lines from end to start to get most recent first.
-		for i := len(lines) - 1; i >= 0; i-- {
-			if len(lines[i]) > maxLogLineSize {
+		for _, v := range slices.Backward(lines) {
+			if len(v) > maxLogLineSize {
 				// Skip oversized lines silently.
 				continue
 			}
 
 			// Try to parse as JSON.
 			var entry map[string]any
-			if err := json.Unmarshal(lines[i], &entry); err != nil {
+			if err := json.Unmarshal(v, &entry); err != nil {
 				// Skip malformed lines silently.
 				continue
 			}
