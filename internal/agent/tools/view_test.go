@@ -134,6 +134,6 @@ func TestReadBuiltinFile(t *testing.T) {
 			Offset:   5,
 		}, nil)
 		require.NoError(t, err)
-		require.NotContains(t, resp.Content, "     1|")
+		require.NotContains(t, resp.Content, "\n1#")
 	})
 }
