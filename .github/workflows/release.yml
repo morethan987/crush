@@ -73,13 +73,14 @@ jobs:
         run: |
           set -euo pipefail
           pkg="crush_${{ github.ref_name }}_${{ matrix.goarch }}"
+          deb_version="${GITHUB_REF_NAME#v}"
           root="dist/${pkg}"
           mkdir -p "${root}/DEBIAN"
           mkdir -p "${root}/usr/bin"
           install -m 0755 "dist/crush_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}" "${root}/usr/bin/crush"
           cat > "${root}/DEBIAN/control" <<EOF
           Package: crush
-          Version: ${{ github.ref_name }}
+          Version: ${deb_version}
           Section: utils
           Priority: optional
           Architecture: ${{ matrix.goarch }}
