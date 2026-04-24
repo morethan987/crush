@@ -1,0 +1,19 @@
+name: Sync Upstream
+
+# 触发条件
+on:
+  schedule:
+    # 每天 UTC 时间凌晨 2 点（北京时间上午 10 点）执行
+    - cron: '0 2 * * *'
+  # 允许在 Actions 页面手动点击按钮触发
+  workflow_dispatch:
+
+jobs:
+  sync-fork:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync fork with upstream
+        # 使用 GitHub 官方的 CLI 工具自动同步 main 分支
+        run: gh repo sync $GITHUB_REPOSITORY -b main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
