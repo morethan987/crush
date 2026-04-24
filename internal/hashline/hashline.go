@@ -1,7 +1,7 @@
 // Package hashline provides line-level content hashing for precise code editing.
-// Each line is annotated with a 2-char FNV-1a hash when read. The LLM uses these
+// Each line is annotated with a 4-char FNV-1a hash when read. The LLM uses these
 // anchors to specify edit ranges instead of copying exact text for replacement.
-// Line format: "42#VK|content of line 42".
+// Line format: "42#VKQR|content of line 42".
 // For lines without letters/digits, the line number seeds the hash to prevent
 // collisions across blank lines.
 package hashline
@@ -13,16 +13,21 @@ import (
 	"strings"
 )
 
-// NibbleStr is the 16-character alphabet for 2-char hash encoding (256 unique combos).
+// NibbleStr is the 16-character alphabet for 4-char hash encoding (65536 unique combos).
 const NibbleStr = "ZPMQVRWSNKTXJBYH"
 
-var hashlineDict [256]string
+// HashLen is the number of characters in a line hash.
+const HashLen = 4
+
+var hashlineDict [65536]string
 
 func init() {
-	for i := range 256 {
-		high := i >> 4
-		low := i & 0x0f
-		hashlineDict[i] = string([]byte{NibbleStr[high], NibbleStr[low]})
+	for i := range 65536 {
+		b0 := NibbleStr[(i>>12)&0xf]
+		b1 := NibbleStr[(i>>8)&0xf]
+		b2 := NibbleStr[(i>>4)&0xf]
+		b3 := NibbleStr[i&0xf]
+		hashlineDict[i] = string([]byte{b0, b1, b2, b3})
 	}
 }
 
@@ -44,7 +49,7 @@ func ComputeLineHash(lineNumber int, content string) string {
 		h.Write(seedBytes[:])
 	}
 	h.Write([]byte(normalized))
-	index := h.Sum32() % 256
+	index := h.Sum32() % 65536
 	return hashlineDict[index]
 }
 
@@ -93,6 +98,52 @@ func ParseLineRef(ref string) (LineRef, error) {
 	}
 
 	return LineRef{}, errInvalidLineRef(ref)
+}
+
+// ResolvedLineRef is a line reference resolved to the actual line in the file.
+// If the hash did not match at the original line number, ResolvedLine indicates
+// where the hash was found via full-text search.
+type ResolvedLineRef struct {
+	LineRef
+	ResolvedLine int
+	AutoResolved bool
+}
+
+// ResolveLineRef resolves a line reference against file content.
+// If the hash matches at the given line number, it returns immediately.
+// If not, it searches the entire file for a line with matching hash.
+// Returns an error if the hash is not found anywhere, or found multiple times.
+func ResolveLineRef(lines []string, ref string) (ResolvedLineRef, error) {
+	lr, err := ParseLineRef(ref)
+	if err != nil {
+		return ResolvedLineRef{}, err
+	}
+
+	// Try exact match first.
+	if lr.Line >= 1 && lr.Line <= len(lines) {
+		actual := ComputeLineHash(lr.Line, lines[lr.Line-1])
+		if actual == lr.Hash {
+			return ResolvedLineRef{LineRef: lr, ResolvedLine: lr.Line, AutoResolved: false}, nil
+		}
+	}
+
+	// Full-text search for the hash.
+	var candidates []int
+	for i, line := range lines {
+		lineNum := i + 1
+		if ComputeLineHash(lineNum, line) == lr.Hash {
+			candidates = append(candidates, lineNum)
+		}
+	}
+
+	switch len(candidates) {
+	case 0:
+		return ResolvedLineRef{}, fmt.Errorf("line %d hash %s not found in file (line content was changed or deleted)", lr.Line, lr.Hash)
+	case 1:
+		return ResolvedLineRef{LineRef: lr, ResolvedLine: candidates[0], AutoResolved: true}, nil
+	default:
+		return ResolvedLineRef{}, fmt.Errorf("hash %s matches multiple lines (%v); provide more context or re-read the file", lr.Hash, candidates)
+	}
 }
 
 // ValidateLineRef validates that a line reference matches actual file content.
@@ -233,11 +284,11 @@ func tryParseRef(s string) (LineRef, bool) {
 		return LineRef{}, false
 	}
 
-	if len(hashStr) < 2 {
+	if len(hashStr) < HashLen {
 		return LineRef{}, false
 	}
-	twoChar := hashStr[:2]
-	for _, c := range twoChar {
+	hashChars := hashStr[:HashLen]
+	for _, c := range hashChars {
 		valid := false
 		for _, n := range NibbleStr {
 			if c == n {
@@ -250,10 +301,10 @@ func tryParseRef(s string) (LineRef, bool) {
 		}
 	}
 
-	return LineRef{Line: lineNum, Hash: twoChar}, true
+	return LineRef{Line: lineNum, Hash: hashChars}, true
 }
 
-var lineRefExtractPattern = regexp.MustCompile(`([0-9]+#[ZPMQVRWSNKTXJBYH]{2})`)
+var lineRefExtractPattern = regexp.MustCompile(`([0-9]+#[ZPMQVRWSNKTXJBYH]{4})`)
 
 func extractLineRef(s string) string {
 	m := lineRefExtractPattern.FindStringSubmatch(s)

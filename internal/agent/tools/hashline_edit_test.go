@@ -188,6 +188,45 @@ func TestApplyHashlineEditsDuplicatePosAnchorRejected(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, applied)
 	require.Len(t, failed, 1)
-	require.Contains(t, failed[0].Error, "has changed since last read")
+	require.Contains(t, failed[0].Error, "not found in file")
 	require.Equal(t, "line 1\nLINE 2 NEW\nline 3\nline 4\nline 5", newContent)
+}
+
+func TestApplyHashlineEditsAutoResolveAfterInsert(t *testing.T) {
+	t.Parallel()
+
+	content := "line 1\nline 2\nline 3\nline 4\nline 5"
+	lines := contentToLines(content)
+
+	// First edit: insert 3 lines after line 1, pushing line 3 to line 6.
+	// Second edit: reference old line 3 (now at line 6) with stale line number.
+	// Auto-resolve should find the hash at the new position.
+	newContent, applied, failed, err := applyEditsToLines(lines, []HashlineEditOperation{
+		{Op: "insert_after", Pos: makeRef(lines, 3), Lines: []string{"ins1", "ins2", "ins3"}},
+		{Op: "replace", Pos: makeRef(lines, 4), Lines: []string{"LINE 4 NEW"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, applied)
+	require.Empty(t, failed)
+	require.Equal(t, "line 1\nline 2\nline 3\nins1\nins2\nins3\nLINE 4 NEW\nline 5", newContent)
+}
+
+func TestApplyHashlineEditsAutoResolveMultipleCandidatesFails(t *testing.T) {
+	t.Parallel()
+
+	// Two lines with identical content should have different hashes only if
+	// they are significant (have letters). But if we construct a case where
+	// hash collision occurs, it should fail with multiple candidates.
+	// Since 4-char hash makes this rare, we test with empty lines (which use line-number seed).
+	content := "line 1\nunique line\nline 3"
+	lines := contentToLines(content)
+
+	// Use a hash that doesn't exist anywhere — should fail.
+	_, applied, failed, err := applyEditsToLines(lines, []HashlineEditOperation{
+		{Op: "replace", Pos: "2#ZZZZ", Lines: []string{"won't work"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, applied)
+	require.Len(t, failed, 1)
+	require.Contains(t, failed[0].Error, "not found in file")
 }

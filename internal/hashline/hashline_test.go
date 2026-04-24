@@ -14,7 +14,7 @@ func TestComputeLineHashDeterministic(t *testing.T) {
 	h1 := ComputeLineHash(42, "func hello() {")
 	h2 := ComputeLineHash(42, "func hello() {")
 	require.Equal(t, h1, h2)
-	require.Len(t, h1, 2)
+	require.Len(t, h1, HashLen)
 }
 
 func TestComputeLineHashDifferentContent(t *testing.T) {
@@ -77,9 +77,9 @@ func TestHashAlphabetChars(t *testing.T) {
 func TestHashlineDictSize(t *testing.T) {
 	t.Parallel()
 
-	require.Len(t, hashlineDict, 256)
+	require.Len(t, hashlineDict, 65536)
 	for i, h := range hashlineDict {
-		require.Len(t, h, 2, "hashlineDict[%d] should be 2 chars", i)
+		require.Len(t, h, HashLen, "hashlineDict[%d] should be %d chars", i, HashLen)
 	}
 }
 
@@ -129,37 +129,37 @@ func TestFormatHashLinesCustomStart(t *testing.T) {
 func TestParseLineRefValid(t *testing.T) {
 	t.Parallel()
 
-	lr, err := ParseLineRef("42#VK")
+	lr, err := ParseLineRef("42#VKQR")
 	require.NoError(t, err)
 	require.Equal(t, 42, lr.Line)
-	require.Equal(t, "VK", lr.Hash)
+	require.Equal(t, "VKQR", lr.Hash)
 }
 
 func TestParseLineRefWithWhitespace(t *testing.T) {
 	t.Parallel()
 
-	lr, err := ParseLineRef("  42#VK  ")
+	lr, err := ParseLineRef("  42#VKQR  ")
 	require.NoError(t, err)
 	require.Equal(t, 42, lr.Line)
-	require.Equal(t, "VK", lr.Hash)
+	require.Equal(t, "VKQR", lr.Hash)
 }
 
 func TestParseLineRefWithPipe(t *testing.T) {
 	t.Parallel()
 
-	lr, err := ParseLineRef("42#VK|some content")
+	lr, err := ParseLineRef("42#VKQR|some content")
 	require.NoError(t, err)
 	require.Equal(t, 42, lr.Line)
-	require.Equal(t, "VK", lr.Hash)
+	require.Equal(t, "VKQR", lr.Hash)
 }
 
 func TestParseLineRefWithLLMPrefix(t *testing.T) {
 	t.Parallel()
 
-	lr, err := ParseLineRef(">>> 42#VK")
+	lr, err := ParseLineRef(">>> 42#VKQR")
 	require.NoError(t, err)
 	require.Equal(t, 42, lr.Line)
-	require.Equal(t, "VK", lr.Hash)
+	require.Equal(t, "VKQR", lr.Hash)
 }
 
 func TestParseLineRefInvalidFormat(t *testing.T) {
@@ -173,24 +173,24 @@ func TestParseLineRefInvalidFormat(t *testing.T) {
 func TestParseLineRefZeroLine(t *testing.T) {
 	t.Parallel()
 
-	_, err := ParseLineRef("0#VK")
+	_, err := ParseLineRef("0#VKQR")
 	require.Error(t, err)
 }
 
 func TestParseLineRefInvalidHashChar(t *testing.T) {
 	t.Parallel()
 
-	_, err := ParseLineRef("42#AB")
-	require.Error(t, err, "A and B are not in the NibbleStr alphabet")
+	_, err := ParseLineRef("42#ABCD")
+	require.Error(t, err, "A, B, C, D are not in the NibbleStr alphabet")
 }
 
 func TestParseLineRefExtracted(t *testing.T) {
 	t.Parallel()
 
-	lr, err := ParseLineRef("some prefix 42#VK and suffix")
+	lr, err := ParseLineRef("some prefix 42#VKQR and suffix")
 	require.NoError(t, err)
 	require.Equal(t, 42, lr.Line)
-	require.Equal(t, "VK", lr.Hash)
+	require.Equal(t, "VKQR", lr.Hash)
 }
 
 func TestValidateLineRefValid(t *testing.T) {
@@ -206,7 +206,7 @@ func TestValidateLineRefOutOfBounds(t *testing.T) {
 	t.Parallel()
 
 	lines := []string{"first", "second"}
-	err := ValidateLineRef(lines, "10#VK")
+	err := ValidateLineRef(lines, "10#VKQR")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of bounds")
 }
@@ -215,7 +215,7 @@ func TestValidateLineRefHashMismatch(t *testing.T) {
 	t.Parallel()
 
 	lines := []string{"first", "second", "third"}
-	err := ValidateLineRef(lines, "2#ZZ")
+	err := ValidateLineRef(lines, "2#ZZZZ")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "changed since last read")
 }
@@ -234,7 +234,7 @@ func TestValidateLineRefsMismatch(t *testing.T) {
 	t.Parallel()
 
 	lines := []string{"first", "second", "third"}
-	err := ValidateLineRefs(lines, []string{"1#ZZ", "3#ZZ"})
+	err := ValidateLineRefs(lines, []string{"1#ZZZZ", "3#ZZZZ"})
 	require.Error(t, err)
 	mismatchErr, ok := err.(*MismatchError)
 	require.True(t, ok, "expected MismatchError")
@@ -281,4 +281,42 @@ func TestFormatHashLinesRoundTrip(t *testing.T) {
 		err := ValidateLineRef(lines, ref)
 		require.NoError(t, err, "ref %q failed validation", ref)
 	}
+}
+
+func TestResolveLineRefExactMatch(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"first", "second", "third"}
+	hash := ComputeLineHash(2, "second")
+	resolved, err := ResolveLineRef(lines, "2#"+hash)
+	require.NoError(t, err)
+	require.Equal(t, 2, resolved.ResolvedLine)
+	require.False(t, resolved.AutoResolved)
+}
+
+func TestResolveLineRefAutoResolveAfterShift(t *testing.T) {
+	t.Parallel()
+
+	// Original file: line 5 has "target"
+	// After insertions, "target" is now at line 8
+	// But the anchor still says 5#<hash>
+	lines := []string{"line 1", "line 2", "line 3", "line 4", "target", "line 6"}
+	_ = lines // original positions for reference
+	originalHash := ComputeLineHash(5, "target")
+
+	// Simulate shift: same content but "target" is at line 8
+	shiftedLines := []string{"line 1", "inserted", "inserted", "inserted", "line 2", "line 3", "line 4", "target", "line 6"}
+	resolved, err := ResolveLineRef(shiftedLines, "5#"+originalHash)
+	require.NoError(t, err)
+	require.Equal(t, 8, resolved.ResolvedLine)
+	require.True(t, resolved.AutoResolved)
+}
+
+func TestResolveLineRefNotFound(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{"first", "second", "third"}
+	_, err := ResolveLineRef(lines, "2#ZZZZ")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found in file")
 }
