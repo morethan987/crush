@@ -13,6 +13,7 @@ Edits files using hash-based line references for precise, efficient code changes
    - pos: Line reference anchor, e.g., "42#VK" (required)
    - end: End line reference for range replace, e.g., "44#NKT" (optional, only for replace)
    - lines: Array of replacement content lines (required)
+3. content: Initial content for creating a new file. Only used when the file does not exist.
 </parameters>
 
 <operations>
@@ -25,6 +26,8 @@ Edits files using hash-based line references for precise, efficient code changes
 **insert_after**: Insert new lines after the anchored line. Original line stays unchanged.
 
 **insert_before**: Insert new lines before the anchored line. Original line stays unchanged.
+
+**Create file**: When the file does not exist, provide the `content` parameter to create it. Parent directories are created automatically.
 </operations>
 
 <advantages>
@@ -88,6 +91,14 @@ Edits files using hash-based line references for precise, efficient code changes
     {"op": "replace", "pos": "10#QR", "lines": ["var version = \"2.0\""]},
     {"op": "insert_after", "pos": "5#ZW", "lines": ["import \"log\""]}
   ]
+}
+```
+
+✅ Create a new file:
+```json
+{
+  "file_path": "/src/newfile.go",
+  "content": "package main\n\nfunc main() {\n    println(\"hello\")\n}"
 }
 ```
 

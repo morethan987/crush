@@ -316,7 +316,7 @@ func (p *Permissions) respond(action PermissionAction) tea.Msg {
 
 func (p *Permissions) hasDiffView() bool {
 	switch p.permission.ToolName {
-	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName:
+	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName, tools.HashlineEditToolName:
 		return true
 	}
 	return false

@@ -13,6 +13,30 @@ env:
   GOEXPERIMENT: greenteagc
 
 tasks:
+  sync:
+    desc: 从 origin/main 同步最新代码并变基到当前分支
+    summary: |
+      前提：GitHub Actions 已经自动将官方 upstream 同步到了你的 origin/main。
+      此任务会拉取远程最新代码，并将你当前的改动重新应用在最新代码之上。
+    cmds:
+      - git fetch origin main
+      - git rebase origin/main
+    preconditions:
+      - sh: '[[ $(git symbolic-ref --short HEAD) != "main" ]]'
+        msg: "❌ 错误：请不要在 main 分支上执行此操作！请切换到你的自定义分支（如 my-version）。"
+
+  sync:push:
+    desc: 同步并强制推送到你的 GitHub 仓库
+    cmds:
+      - task: sync
+      - git push origin {{.BRANCH}} -f
+    vars:
+      BRANCH:
+        sh: git symbolic-ref --short HEAD
+    preconditions:
+      - sh: '[[ $(git symbolic-ref --short HEAD) != "main" ]]'
+        msg: "❌ 错误：禁止对 main 分支进行强制推送！"
+
   lint:install:
     desc: Install golangci-lint
     cmds:
