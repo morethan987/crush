@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -34,7 +35,8 @@ type HashlineEditOperation struct {
 
 type HashlineEditParams struct {
 	FilePath string                  `json:"file_path" description:"The absolute path to the file to modify"`
-	Edits    []HashlineEditOperation `json:"edits" description:"Array of hashline edit operations to apply bottom-up"`
+	Edits    []HashlineEditOperation `json:"edits,omitempty" description:"Array of hashline edit operations to apply bottom-up"`
+	Content  string                  `json:"content,omitempty" description:"Initial content for creating a new file. Only used when the file does not exist."`
 }
 
 type HashlineEditPermissionsParams struct {
@@ -73,27 +75,30 @@ func NewHashlineEditTool(
 				return fantasy.NewTextErrorResponse("file_path is required"), nil
 			}
 
-			if len(params.Edits) == 0 {
-				return fantasy.NewTextErrorResponse("at least one edit operation is required"), nil
+			if len(params.Edits) == 0 && params.Content == "" {
+				return fantasy.NewTextErrorResponse("at least one edit operation or content is required"), nil
 			}
 
 			params.FilePath = filepathext.SmartJoin(workingDir, params.FilePath)
 
+			sessionID := GetSessionFromContext(ctx)
+			if sessionID == "" {
+				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for editing file")
+			}
+
 			fileInfo, err := os.Stat(params.FilePath)
 			if err != nil {
 				if os.IsNotExist(err) {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("file not found: %s", params.FilePath)), nil
+					if params.Content == "" {
+						return fantasy.NewTextErrorResponse(fmt.Sprintf("file not found: %s", params.FilePath)), nil
+					}
+					return handleHashlineEditCreateFile(ctx, lspManager, permissions, files, filetracker, workingDir, sessionID, params, call)
 				}
 				return fantasy.ToolResponse{}, fmt.Errorf("failed to access file: %w", err)
 			}
 
 			if fileInfo.IsDir() {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("path is a directory, not a file: %s", params.FilePath)), nil
-			}
-
-			sessionID := GetSessionFromContext(ctx)
-			if sessionID == "" {
-				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for editing file")
 			}
 
 			lastRead := filetracker.LastReadTime(ctx, sessionID, params.FilePath)
@@ -417,4 +422,85 @@ func applyInsertBefore(lines []string, edit HashlineEditOperation) ([]string, er
 	newLines = append(newLines, edit.Lines...)
 	newLines = append(newLines, result[lr.Line-1:]...)
 	return newLines, nil
+}
+
+func handleHashlineEditCreateFile(
+	ctx context.Context,
+	lspManager *lsp.Manager,
+	permissions permission.Service,
+	files history.Service,
+	filetracker filetracker.Service,
+	workingDir string,
+	sessionID string,
+	params HashlineEditParams,
+	call fantasy.ToolCall,
+) (fantasy.ToolResponse, error) {
+	dir := filepath.Dir(params.FilePath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fantasy.ToolResponse{}, fmt.Errorf("failed to create parent directories: %w", err)
+	}
+
+	content := params.Content
+
+	_, additions, removals := diff.GenerateDiff(
+		"",
+		content,
+		strings.TrimPrefix(params.FilePath, workingDir),
+	)
+
+	p, err := permissions.Request(ctx,
+		permission.CreatePermissionRequest{
+			SessionID:   sessionID,
+			Path:        fsext.PathOrPrefix(params.FilePath, workingDir),
+			ToolCallID:  call.ID,
+			ToolName:    HashlineEditToolName,
+			Action:      "write",
+			Description: fmt.Sprintf("Create file %s", params.FilePath),
+			Params: HashlineEditPermissionsParams{
+				FilePath:   params.FilePath,
+				OldContent: "",
+				NewContent: content,
+			},
+		},
+	)
+	if err != nil {
+		return fantasy.ToolResponse{}, err
+	}
+	if !p {
+		return fantasy.ToolResponse{}, permission.ErrorPermissionDenied
+	}
+
+	err = os.WriteFile(params.FilePath, []byte(content), 0o644)
+	if err != nil {
+		return fantasy.ToolResponse{}, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	_, err = files.Create(ctx, sessionID, params.FilePath, "")
+	if err != nil {
+		return fantasy.ToolResponse{}, fmt.Errorf("error creating file history: %w", err)
+	}
+
+	_, err = files.CreateVersion(ctx, sessionID, params.FilePath, content)
+	if err != nil {
+		slog.Error("Error creating file history version", "error", err)
+	}
+
+	filetracker.RecordRead(ctx, sessionID, params.FilePath)
+
+	notifyLSPs(ctx, lspManager, params.FilePath)
+
+	message := fmt.Sprintf("File created: %s", params.FilePath)
+	text := fmt.Sprintf("<result>\n%s\n</result>\n", message)
+	text += getDiagnostics(params.FilePath, lspManager)
+
+	return fantasy.WithResponseMetadata(
+		fantasy.NewTextResponse(text),
+		HashlineEditResponseMetadata{
+			OldContent:   "",
+			NewContent:   content,
+			Additions:    additions,
+			Removals:     removals,
+			EditsApplied: 0,
+		},
+	), nil
 }
