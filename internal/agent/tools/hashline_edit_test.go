@@ -174,3 +174,20 @@ func TestApplyHashlineEditsEmptyContent(t *testing.T) {
 	require.Empty(t, failed)
 	require.Equal(t, "hello", newContent)
 }
+
+func TestApplyHashlineEditsDuplicatePosAnchorRejected(t *testing.T) {
+	t.Parallel()
+
+	content := "line 1\nline 2\nline 3\nline 4\nline 5"
+	lines := contentToLines(content)
+
+	newContent, applied, failed, err := applyEditsToLines(lines, []HashlineEditOperation{
+		{Op: "replace", Pos: makeRef(lines, 2), Lines: []string{"LINE 2 NEW"}},
+		{Op: "replace", Pos: makeRef(lines, 2), Lines: []string{"LINE 2 OTHER"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, applied)
+	require.Len(t, failed, 1)
+	require.Contains(t, failed[0].Error, "has changed since last read")
+	require.Equal(t, "line 1\nLINE 2 NEW\nline 3\nline 4\nline 5", newContent)
+}

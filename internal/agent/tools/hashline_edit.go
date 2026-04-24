@@ -348,14 +348,43 @@ func applyOneEdit(lines []string, edit HashlineEditOperation) ([]string, error) 
 	}
 }
 
+func validateEditHashes(lines []string, edit HashlineEditOperation) error {
+	startRef, err := hashline.ParseLineRef(edit.Pos)
+	if err != nil {
+		return err
+	}
+	if startRef.Line < 1 || startRef.Line > len(lines) {
+		return fmt.Errorf("line %d out of bounds (file has %d lines)", startRef.Line, len(lines))
+	}
+	actual := hashline.ComputeLineHash(startRef.Line, lines[startRef.Line-1])
+	if actual != startRef.Hash {
+		return fmt.Errorf("line %d has changed since last read (expected %s, got %s). Re-read the file to get updated hashes", startRef.Line, startRef.Hash, actual)
+	}
+	if edit.End != "" {
+		endRef, err := hashline.ParseLineRef(edit.End)
+		if err != nil {
+			return err
+		}
+		if endRef.Line < 1 || endRef.Line > len(lines) {
+			return fmt.Errorf("end line %d out of bounds (file has %d lines)", endRef.Line, len(lines))
+		}
+		endActual := hashline.ComputeLineHash(endRef.Line, lines[endRef.Line-1])
+		if endActual != endRef.Hash {
+			return fmt.Errorf("end line %d has changed since last read (expected %s, got %s). Re-read the file to get updated hashes", endRef.Line, endRef.Hash, endActual)
+		}
+	}
+	return nil
+}
+
 func applyReplace(lines []string, edit HashlineEditOperation) ([]string, error) {
+	if err := validateEditHashes(lines, edit); err != nil {
+		return nil, err
+	}
+
 	startRef, err := hashline.ParseLineRef(edit.Pos)
 	if err != nil {
 		return nil, err
 	}
-
-	result := make([]string, len(lines))
-	copy(result, lines)
 
 	if edit.End != "" {
 		endRef, err := hashline.ParseLineRef(edit.End)
@@ -366,10 +395,10 @@ func applyReplace(lines []string, edit HashlineEditOperation) ([]string, error) 
 			return nil, fmt.Errorf("start line %d cannot be greater than end line %d", startRef.Line, endRef.Line)
 		}
 		replacement := edit.Lines
-		newLines := make([]string, 0, len(result)-((endRef.Line-startRef.Line)+1)+len(replacement))
-		newLines = append(newLines, result[:startRef.Line-1]...)
+		newLines := make([]string, 0, len(lines)-((endRef.Line-startRef.Line)+1)+len(replacement))
+		newLines = append(newLines, lines[:startRef.Line-1]...)
 		newLines = append(newLines, replacement...)
-		newLines = append(newLines, result[endRef.Line:]...)
+		newLines = append(newLines, lines[endRef.Line:]...)
 		return newLines, nil
 	}
 
@@ -377,14 +406,18 @@ func applyReplace(lines []string, edit HashlineEditOperation) ([]string, error) 
 	if len(replacement) == 0 {
 		replacement = []string{}
 	}
-	newLines := make([]string, 0, len(result)-1+len(replacement))
-	newLines = append(newLines, result[:startRef.Line-1]...)
+	newLines := make([]string, 0, len(lines)-1+len(replacement))
+	newLines = append(newLines, lines[:startRef.Line-1]...)
 	newLines = append(newLines, replacement...)
-	newLines = append(newLines, result[startRef.Line:]...)
+	newLines = append(newLines, lines[startRef.Line:]...)
 	return newLines, nil
 }
 
 func applyInsertAfter(lines []string, edit HashlineEditOperation) ([]string, error) {
+	if err := validateEditHashes(lines, edit); err != nil {
+		return nil, err
+	}
+
 	lr, err := hashline.ParseLineRef(edit.Pos)
 	if err != nil {
 		return nil, err
@@ -394,17 +427,18 @@ func applyInsertAfter(lines []string, edit HashlineEditOperation) ([]string, err
 		return nil, fmt.Errorf("insert_after requires at least one line of content")
 	}
 
-	result := make([]string, len(lines))
-	copy(result, lines)
-
-	newLines := make([]string, 0, len(result)+len(edit.Lines))
-	newLines = append(newLines, result[:lr.Line]...)
+	newLines := make([]string, 0, len(lines)+len(edit.Lines))
+	newLines = append(newLines, lines[:lr.Line]...)
 	newLines = append(newLines, edit.Lines...)
-	newLines = append(newLines, result[lr.Line:]...)
+	newLines = append(newLines, lines[lr.Line:]...)
 	return newLines, nil
 }
 
 func applyInsertBefore(lines []string, edit HashlineEditOperation) ([]string, error) {
+	if err := validateEditHashes(lines, edit); err != nil {
+		return nil, err
+	}
+
 	lr, err := hashline.ParseLineRef(edit.Pos)
 	if err != nil {
 		return nil, err
@@ -414,13 +448,10 @@ func applyInsertBefore(lines []string, edit HashlineEditOperation) ([]string, er
 		return nil, fmt.Errorf("insert_before requires at least one line of content")
 	}
 
-	result := make([]string, len(lines))
-	copy(result, lines)
-
-	newLines := make([]string, 0, len(result)+len(edit.Lines))
-	newLines = append(newLines, result[:lr.Line-1]...)
+	newLines := make([]string, 0, len(lines)+len(edit.Lines))
+	newLines = append(newLines, lines[:lr.Line-1]...)
 	newLines = append(newLines, edit.Lines...)
-	newLines = append(newLines, result[lr.Line-1:]...)
+	newLines = append(newLines, lines[lr.Line-1:]...)
 	return newLines, nil
 }
 
