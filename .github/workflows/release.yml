@@ -1,34 +1,114 @@
-# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
-
-name: goreleaser
+name: release
 
 on:
   push:
     tags:
       - v*.*.*
 
+permissions:
+  contents: write
+
 concurrency:
-  group: goreleaser
+  group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  goreleaser:
-    uses: charmbracelet/meta/.github/workflows/goreleaser.yml@main
-    with:
-      go_version: "1.26"
-      macos_sign_entitlements: "./.github/entitlements.plist"
-    secrets:
-      docker_username: ${{ secrets.DOCKERHUB_USERNAME }}
-      docker_token: ${{ secrets.DOCKERHUB_TOKEN }}
-      gh_pat: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      goreleaser_key: ${{ secrets.GORELEASER_KEY }}
-      fury_token: ${{ secrets.FURY_TOKEN }}
-      nfpm_gpg_key: ${{ secrets.NFPM_GPG_KEY }}
-      nfpm_passphrase: ${{ secrets.NFPM_PASSPHRASE }}
-      snapcraft_token: ${{ secrets.SNAPCRAFT_TOKEN }}
-      aur_key: ${{ secrets.AUR_KEY }}
-      macos_sign_p12: ${{ secrets.MACOS_SIGN_P12 }}
-      macos_sign_password: ${{ secrets.MACOS_SIGN_PASSWORD }}
-      macos_notary_issuer_id: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-      macos_notary_key_id: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-      macos_notary_key: ${{ secrets.MACOS_NOTARY_KEY }}
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ext=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            ext=".exe"
+          fi
+          out="crush_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}${ext}"
+          GOOS="${{ matrix.goos }}" GOARCH="${{ matrix.goarch }}" CGO_ENABLED=0 GOEXPERIMENT=greenteagc go build -trimpath -ldflags "-s -w -X github.com/charmbracelet/crush/internal/version.Version=${{ github.ref_name }}" -o "dist/${out}" .
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            powershell -Command "Compress-Archive -Path crush_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}.exe -DestinationPath crush_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}.zip -Force"
+          else
+            tar -czf "crush_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" "crush_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          fi
+
+      - name: Package deb
+        if: matrix.goos == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="crush_${{ github.ref_name }}_${{ matrix.goarch }}"
+          root="dist/${pkg}"
+          mkdir -p "${root}/DEBIAN"
+          mkdir -p "${root}/usr/bin"
+          install -m 0755 "dist/crush_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}" "${root}/usr/bin/crush"
+          cat > "${root}/DEBIAN/control" <<EOF
+          Package: crush
+          Version: ${{ github.ref_name }}
+          Section: utils
+          Priority: optional
+          Architecture: ${{ matrix.goarch }}
+          Maintainer: crush fork
+          Description: A powerful terminal-based AI assistant for developers
+          EOF
+          dpkg-deb --build "${root}" "dist/${pkg}.deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
