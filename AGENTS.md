@@ -1,20 +1,19 @@
 # Crush Development Guide
 
-## Project Overview
+**Commit:** 8b30fad1
+**Branch:** main
+**Stats:** 285 Go files, ~60k LoC
 
-Crush is a terminal-based AI coding assistant built in Go by
-[Charm](https://charm.land). It connects to LLMs and gives them tools to read,
-write, and execute code. It supports multiple providers (Anthropic, OpenAI,
-Gemini, Bedrock, Copilot, Hyper, MiniMax, Vercel, and more), integrates with
-LSPs for code intelligence, and supports extensibility via MCP servers and
-agent skills.
+## Overview
 
-The module path is `github.com/charmbracelet/crush`.
+Terminal-based AI coding assistant (Go, Charm ecosystem). Multi-provider LLM
+gateway with tool execution, LSP integration, MCP extensibility, and Bubble Tea
+v2 TUI. Module path: `github.com/charmbracelet/crush`.
 
-## Architecture
+## Structure
 
 ```
-main.go                            CLI entry point (cobra via internal/cmd)
+main.go                          CLI entry → internal/cmd
 internal/
   app/app.go                       Top-level wiring: DB, config, agents, LSP, MCP, events
   cmd/                             CLI commands (root, run, login, models, stats, sessions)
@@ -50,18 +49,21 @@ internal/
   history/                         Prompt history
 ```
 
-### Key Dependency Roles
+## Where to Look
 
-- **`charm.land/fantasy`**: LLM provider abstraction layer. Handles protocol
-  differences between Anthropic, OpenAI, Gemini, etc. Used in `internal/app`
-  and `internal/agent`.
-- **`charm.land/bubbletea/v2`**: TUI framework powering the interactive UI.
-- **`charm.land/lipgloss/v2`**: Terminal styling.
-- **`charm.land/glamour/v2`**: Markdown rendering in the terminal.
-- **`charm.land/catwalk`**: Snapshot/golden-file testing for TUI components.
-- **`sqlc`**: Generates Go code from SQL queries in `internal/db/sql/`.
+| Task | Location | Notes |
+|------|----------|-------|
+| Add a new tool | `internal/agent/tools/` | Create .go + .md pair, register in buildTools() |
+| Change system prompt | `internal/agent/templates/` | Go templates with runtime injection |
+| Add CLI command | `internal/cmd/` | Cobra command pattern |
+| Change config schema | `internal/config/config.go` | Config struct + JSON schema |
+| Add provider | `internal/config/` | ProviderConfig + provider file |
+| DB schema change | `internal/db/sql/` + `migrations/` | Write SQL → run sqlc generate |
+| TUI component | `internal/ui/` | See internal/ui/AGENTS.md |
+| Chat message rendering | `internal/ui/chat/` | Tool renderers by file |
+| MCP integration | `internal/agent/tools/mcp/` | stdio/http/sse transports |
 
-### Key Patterns
+## Key Dependencies
 
 - **Config is a Service**: accessed via `config.Service`, not global state.
 - **Tools are self-documenting**: each tool has a `.go` implementation and a
@@ -84,21 +86,28 @@ internal/
 - **CGO disabled**: builds with `CGO_ENABLED=0` and
   `GOEXPERIMENT=greenteagc`.
 
-## Build/Test/Lint Commands
+## Key Patterns
 
-- **Build**: `go build .` or `go run .`
-- **Test**: `task test` or `go test ./...` (run single test:
-  `go test ./internal/llm/prompt -run TestGetContextFromPaths`)
-- **Update Golden Files**: `go test ./... -update` (regenerates `.golden`
-  files when test output changes)
-  - Update specific package:
-    `go test ./internal/tui/components/core -update` (in this case,
-    we're updating "core")
-- **Lint**: `task lint:fix`
-- **Format**: `task fmt` (`gofumpt -w .`)
-- **Modernize**: `task modernize` (runs `modernize` which makes code
-  simplifications)
-- **Dev**: `task dev` (runs with profiling enabled)
+- **Config is a Service**: `config.Service`, not global state.
+- **Tools are self-documenting**: each tool has `.go` + `.md` in `internal/agent/tools/`.
+- **System prompts are Go templates**: `templates/*.md.tpl` with runtime data.
+- **Context files**: Reads AGENTS.md, CRUSH.md, CLAUDE.md, GEMINI.md (+ `.local` variants).
+- **Persistence**: SQLite + sqlc. SQL in `db/sql/`, generated code in `db/`.
+- **Pub/sub**: `internal/pubsub` for agent ↔ UI ↔ services.
+- **CGO disabled**: `CGO_ENABLED=0`, `GOEXPERIMENT=greenteagc`.
+- **Centralized UI model**: `UI` is the sole Bubble Tea model; sub-components are imperative structs.
+
+## Commands
+
+```bash
+go build .              # Build
+task test               # Test (or go test ./...)
+task lint:fix           # Lint
+task fmt                # Format (gofumpt -w .)
+task modernize          # Code simplifications
+task dev                # Dev mode with profiling
+go test ./... -update   # Regenerate golden files
+```
 
 ## Code Style Guidelines
 
@@ -177,7 +186,10 @@ func TestYourFunction(t *testing.T) {
 - Try to keep commits to one line, not including your attribution. Only use
   multi-line commits when additional context is truly necessary.
 
-## Working on the TUI (UI)
+## Subdirectory Guides
 
-Anytime you need to work on the TUI, read `internal/ui/AGENTS.md` before
-starting work.
+| Path | Focus |
+|------|-------|
+| `internal/ui/AGENTS.md` | TUI architecture, rendering pipeline, component patterns |
+| `internal/agent/tools/AGENTS.md` | Tool system, registration, creating new tools |
+| `internal/config/AGENTS.md` | Config service, provider management, model resolution |
